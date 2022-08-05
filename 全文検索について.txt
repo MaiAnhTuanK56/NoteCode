@@ -1,0 +1,283 @@
+
+
+「CLISTA! KarteSearch」で使用できる全文検索機能について説明します。
+
+
+■全文検索とは
+SQLでテキスト検索する場合、一般的にはLIKE演算子が使用されます。
+
+LIKE演算子を使って「癌」という文字列を検索する例：
+＝＝＝＝＝＝＝＝＝＝＝＝＝
+select
+  *
+from
+  VE_00001234
+where
+  COL0000001234 like '%癌%'
+＝＝＝＝＝＝＝＝＝＝＝＝＝
+
+しかし、LIKE演算子を使用するとインデックスが有効にならないため、
+検索対象のテキスト量が多くなると、極端に検索速度が落ちてしまうという問題があります。
+
+全文検索では専用のインデックスを持つことによって、大幅に検索速度を向上させることができます。
+
+※ただし、検索対象のテキスト量が少ない場合はLIKE演算子より遅くなることもあります。
+
+※DBの種類によって全文検索の呼称が異なりますが、この資料では「全文検索」という名称で統一します。
+SqlServer：フルテキスト検索
+Oracle：Oracle Text
+DB2：Text Search
+
+
+■全文検索の導入設定（SqlServer）
+
+1) ビューのインデックスを作成します。
+CREATE UNIQUE CLUSTERED INDEX IDX_COL0000001234 ON VE_00001234 ( COL0000001234 ) 
+
+※Oracle、DB2ではテーブルに対してインデックスを作成しますが、
+SqlServerではビューに対してインデックスを作成しますので注意してください。
+
+2) 「SQL Server Management Studio」でフルテキストインデックスを作成します。
+
+「使用可能な列」にチェックを入れ、ワードブレーカーの言語を「Japanese」を指定します。
+
+3) SQL文を実行して動作確認します。
+＝＝＝＝＝＝＝＝＝＝＝＝＝
+select
+  *
+from
+  VE_00001234 
+where
+  contains(COL0000001234, '癌')
+＝＝＝＝＝＝＝＝＝＝＝＝＝
+
+※詳細は公式ドキュメントを参照してください。
+https://msdn.microsoft.com/ja-JP/library/ms142571.aspx
+
+// 注意点 ////////////////////////////////////////////////////////////////////////////////////////////////
+・対象テーブルに単一項目、NOT NULL、ユニークとなるインデックスが必要（PKでもOK。ただし単一項目）
+
+・対象テーブルにTIMESTAMP型項目が無い場合は、フルテキストインデックスの再構築は「手動」のみ
+    「WITH CHANGE_TRACKING MANUAL」※再構築を行わないと、検索対象にあがって来ない。
+
+・ビューに対してインデックスを作成する場合
+    CREATE VIEW に WITH SCHEMABINDING を 追加する必要がある
+    これによって、インデックス作成可能なビューとなり、UNIQUEインデックスを作成し、
+    それに対して、全文検索インデックスの作成まで行うことが可能になる
+
+// SQL例 ////////////////////////////////////////////////////////////////////////////////////////////////
+【SQL Server フルテキストインデックスの作成】
+
+・全文検索用ユニークキー作成（※単一項目＋NOT NULLで、ユニークとなるキーを指定する必要がある
+    CREATE UNIQUE INDEX <ユニークインデックス名> ON <テーブル名>(<KEY列名>)
+    CREATE UNIQUE INDEX UNQ_Test_TBL2 ON Test_TBL2(TestKey)
+
+・カタログの作成
+    CREATE FULLTEXT CATALOG <カタログ名> ON FILEGROUP SECONDARY
+    CREATE FULLTEXT CATALOG FTCTLG_TEST ON FILEGROUP SECONDARY
+
+・全文検索インデックス作成（手動更新）
+    CREATE FULLTEXT INDEX ON <テーブル名>(列名, 列名) KEY INDEX <ユニークインデックス名> ON <カタログ名> WITH CHANGE_TRACKING MANUAL
+    CREATE FULLTEXT INDEX ON Test_TBL2(Test2Char) KEY INDEX UNQ_Test_TBL2 ON FTCTLG_TEST WITH CHANGE_TRACKING MANUAL
+
+・インデックスの追加構築
+    ALTER FULLTEXT INDEX ON <テーブル名> START UPDATE POPULATION
+    ALTER FULLTEXT INDEX ON Test_TBL2 START UPDATE POPULATION
+
+・インデックスの断片化を解消
+    ALTER FULLTEXT CATALOG <カタログ名> REORGANIZE
+    ALTER FULLTEXT CATALOG FTCTLG_TEST REORGANIZE
+
+・削除
+    DROP FULLTEXT INDEX ON Test_TBL2
+    DROP FULLTEXT CATALOG FTCTLG_TEST
+    DROP INDEX UNQ_Test_TBL2 ON Test_TBL2
+
+・ビューに全文検索インデックスをつける
+    CREATE UNIQUE CLUSTERED INDEX UNQ_VE_00001023 ON VE_00001023(COL0000001186)
+    CREATE FULLTEXT INDEX ON VE_00001023(COL0000001197,COL0000001198) KEY INDEX UNQ_VE_00001023 ON FTCTLG_TEST WITH CHANGE_TRACKING MANUAL
+        ※CLUSTERED をつけてインデックスを作成
+    ALTER FULLTEXT INDEX ON VE_00001023 START UPDATE POPULATION
+
+・ユニークキーにプライマリーキーのインデックスを指定（OK
+    CREATE FULLTEXT CATALOG FTCTLG_TEST ON FILEGROUP SECONDARY
+    CREATE FULLTEXT INDEX ON VE_00001022_MT(COL0000001185) KEY INDEX PK_1022 ON FTCTLG_TEST WITH CHANGE_TRACKING MANUAL
+    
+    ALTER FULLTEXT INDEX ON VE_00001022_MT START UPDATE POPULATION
+    
+    DROP FULLTEXT INDEX ON VE_00001022_MT
+    DROP FULLTEXT CATALOG FTCTLG_TEST
+
+
+■全文検索の導入設定（Oracle）
+
+1.全文検索の設定に必要な権限を付与します。
+connect canu30/User123
+grant ctxapp to canu30;
+
+2) レクサーを設定します。
+connect canu30/User123
+execute ctx_ddl.create_preference('karte_search_lexer','JAPANESE_VGRAM_LEXER');
+
+3) テーブルのインデックスを作成します。
+create index IDX_KarteText on Karte_TBL (KarteText) indextype is ctxsys.context parameters ('lexer karte_search_lexer');
+
+4) テーブルのインデックスを更新します。
+exec ctx_ddl.sync_index('IDX_KarteText');
+
+5) シソーラスを読み込みます。
+ctxload -thes -name my_thes -file my_thes.txt 
+
+my_thes.txt
+＝＝＝＝＝＝＝＝＝＝＝＝＝
+癌
+ ENGLISH: cancer
+ SYN がん
+ SYN ガン
+＝＝＝＝＝＝＝＝＝＝＝＝＝
+
+6) SQL文を実行して動作確認します。
+全文検索（Oracle）
+＝＝＝＝＝＝＝＝＝＝＝＝＝
+select
+  *
+from
+  VE_00001123 
+where
+  contains(COL0000001663, 'syn(癌, my_thes)') > 0 
+＝＝＝＝＝＝＝＝＝＝＝＝＝
+
+※詳細は公式ドキュメントを参照してください。
+https://blogs.oracle.com/oracle4engineer/entry/column_oracle_text
+
+
+■全文検索の導入設定（DB2）
+
+1) DB2 サーバーのみをインストール
+Windows 2008 64 bit と DB2 V10.1 FP3 64 bit の例です
+エクスプローラにて setup.exe を右クリックして「管理者として実行」を選択
+この時点では Text Search をインストールせずに DB2 サーバー製品のみインストールします。
+インストールが終了したらファーストステップを閉じます
+
+2) データベースの作成
+Windows のスタートから-> すべてのプログラム -> DB2 -> DB2 コマンド・ウィンドウ - 管理者を開き MEI10 を実行します。
+この時点では DB2 server のみで機能しています。
+db2iupdt コマンドの前に一度 "db2ts enable database for text" を実施したデータベースの場合、テキスト索引の作成時に SQL20427N エラーが発生する場合があります。
+そのため、db2iupdt を実施後に "db2ts enable database for text" コマンドを実行するようにしてください。 
+
+3) DB2 サーバーのみをインストールしている環境へ後から DB2 Text Search をインストールします。
+エクスプローラにて setup.exe を右クリックして管理者として実行を選択 -> 既存の製品を操作 を選びます
+
+4) カスタム・インストールを選択 (対象の DB2 コピーを選びます) 
+
+5) DB2 セットアップ・ウィザードの起動をクリック 
+
+6) 変更を選択 
+
+7) サーバー・サポートを選択 
+
+8) DB2 Text Search を選択 
+
+9) これを選ぶと付属するサブ・フィーチャーもインストールされます。 
+
+10) "次へ" を選びインストールを続けます。 
+
+11) インストールが終了したら「DB2 コマンド・ウィンドウ - 管理者」を開き、DB2 サーバーを停止します。
+db2stop
+
+13) インスタンスを DB2 Text Search 向けにアップデートします。
+db2iupdt DB2 /u <サービス起動ユーザー名>,<パスワード> /j TEXT_SEARCH
+
+14) DB2 インスタンスを起動
+db2start
+
+15) データベースへ接続
+db2 connect to MEI10
+
+16) DB2 Text Search を sample データベースで利用可能にする
+db2ts "ENABLE DATABASE FOR TEXT CONNECT TO MEI10"
+
+17) DB2 Text Search を起動する
+db2ts "START FOR TEXT"
+
+18) インデックスを作成する
+set DB2DBDFT=MEI10 
+db2ts "create index IDX_KarteText for text on canu30.Karte_TBL(KarteText)" 
+db2ts "update index IDX_KarteText for text" 
+
+19) SQL文を実行して動作確認する
+全文検索（DB2）
+＝＝＝＝＝＝＝＝＝＝＝＝＝
+select
+  *
+from
+  VE_00001234 
+where
+  contains(COL0000001234, '癌') = 1
+＝＝＝＝＝＝＝＝＝＝＝＝＝
+
+
+※詳細は公式ドキュメントを参照してください。
+http://www-01.ibm.com/support/docview.wss?uid=swg21665505
+https://www.ibm.com/support/knowledgecenter/ja/SSEPGG_11.1.0/com.ibm.db2.luw.admin.ts.doc/doc/c0051296.html
+
+
+■シソーラスとは
+
+「シソーラス」は語句を意味によって分類・配列した語彙集です。
+
+例えばOracleで下記のシソーラス定義を読み込むと、
+「癌」という検索文字列から「がん」「ガン」というテキストを検索することが可能となります。
+
+my_thes.txt（Oracle）
+＝＝＝＝＝＝＝＝＝＝＝＝＝
+癌
+ ENGLISH: cancer
+ SYN がん
+ SYN ガン
+＝＝＝＝＝＝＝＝＝＝＝＝＝
+
+SqlServer＞フルテキスト検索に使用する類義語辞典ファイルの構成と管理
+https://msdn.microsoft.com/ja-jp/library/ms142491.aspx
+
+Oracle＞C Oracle Textのテキストのロード例
+https://docs.oracle.com/cd/E16338_01/text.112/b61357/aload.htm
+
+DB2＞シソーラス検索
+https://www.ibm.com/support/knowledgecenter/ja/SSEPGG_9.7.0/com.ibm.db2.luw.admin.nse.topics.doc/doc/t0052185.html
+
+※KarteSearchではOracleのみシソーラス読み込みが必須となっています。
+
+
+■インデックスの自動更新
+
+インデックスは手動または自動で更新する必要があります。
+インデックスが更新されない場合は、レコードが追加されても検索対象となりませんので注意してください。
+
+SqlServer＞フルテキスト インデックスの作成
+https://msdn.microsoft.com/ja-jp/library/ms142575.aspx
+
+Oracle＞C Oracle Text索引の管理
+https://docs.oracle.com/cd/E18356_01/content.1013/E05041-01/text.htm
+
+DB2＞テキスト索引の更新と再編成
+https://www.ibm.com/support/knowledgecenter/ja/SSEPGG_11.1.0/com.ibm.db2.luw.admin.nse.topics.doc/doc/t0052165.html
+
+
+■ViewEditorのターゲット設定
+
+1) 全文検索対象の列に「全文検索」のチェックを入れてください。
+
+2) カルテ検索対象ターゲットの「対象アプリケーション」に「CLISTA! KarteSearch＞カルテ検索対象」を指定してください。
+
+3) フォーカス検索対象ターゲットの「対象アプリケーション」に「CLISTA! KarteSearch＞フォーカス検索対象」を指定してください。
+
+※フォーカス検索対象のテーブルおよびビューは全文検索の設定は必要ありません。
+
+
+■Config_TBLの設定
+
+Config_TBLの「DepartmentSharedMasterId」に診療科マスタの「SharedMasterId」を登録してください。
+
+※「DepartmentSharedMasterId」を設定しておかないと、KarteSearchの検索条件設定のウィンドウを開くことができません。
+
